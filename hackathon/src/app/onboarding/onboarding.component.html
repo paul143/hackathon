@@ -1,0 +1,130 @@
+<div class="onboarding-container">
+  <div class="info-banner">
+    <div class="banner-header">
+      <span class="banner-icon">🚀</span>
+      <h3>Agentic AI Onboarding Assistant</h3>
+    </div>
+    <p class="banner-description">
+      An autonomous guide for new customers through the entire onboarding journey—from initial interest to policy activation—by handling document collection, verification, KYC, and policy recommendation.
+    </p>
+    
+    <div class="banner-features">
+      <div class="feature-item">
+        <span class="feature-icon">⚠️</span>
+        <div class="feature-content">
+          <h4>Challenges of Traditional Onboarding</h4>
+          <p>Traditional insurance onboarding suffers from inefficiencies and complex paperwork causing customer dropoffs.</p>
+        </div>
+      </div>
+      
+      <div class="feature-item">
+        <span class="feature-icon">🤖</span>
+        <div class="feature-content">
+          <h4>Agentic AI Automation</h4>
+          <p>OnboardAI uses intelligent agents to automate and personalize the onboarding journey effectively.</p>
+        </div>
+      </div>
+      
+      <div class="feature-item">
+        <span class="feature-icon">⚙️</span>
+        <div class="feature-content">
+          <h4>Technology Integration</h4>
+          <p>Integrates natural language processing, document verification, and real-time tracking for seamless onboarding.</p>
+        </div>
+      </div>
+      
+      <div class="feature-item">
+        <span class="feature-icon">💼</span>
+        <div class="feature-content">
+          <h4>Business Benefits</h4>
+          <p>Enhances customer satisfaction, reduces operational costs, and improves insurance conversion rates.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h1>Welcome to the Onboarding Assistant</h1>
+
+  <div class="tiles-container">
+    <section class="tile user-info" [class.disabled]="isUserInfoSubmitted">
+      <div class="tile-icon">👋</div>
+      <h2>User Information</h2>
+      <p>Please enter your email to begin:</p>
+      <form (ngSubmit)="submitUserInfo()">
+        <label for="username">Your Email:</label>
+        <input type="email" id="username" [(ngModel)]="userName" [ngModelOptions]="{standalone: true}" placeholder="Enter your email" required [disabled]="isUserInfoSubmitted" />
+        <p class="validation-message" *ngIf="userInfoValidationMessage">{{ userInfoValidationMessage }}</p>
+        
+        <div class="progress-container" *ngIf="isProcessingUserInfo">
+          <p class="processing-text">Processing...</p>
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="userInfoProgress"></div>
+          </div>
+          <p class="progress-percentage">{{ userInfoProgress }}%</p>
+        </div>
+        
+        <button type="submit" [disabled]="isUserInfoSubmitted || isProcessingUserInfo">Next</button>
+      </form>
+    </section>
+
+    <section class="tile document-collection" [class.disabled]="!isUserInfoSubmitted || isDocumentsSubmitted">
+      <div class="tile-icon">📄</div>
+      <h2>Document Collection</h2>
+      <p>Upload your documents below:</p>
+      
+      <div class="agent-selection">
+        <label for="verification-agent">Agent for Document Verification:</label>
+        <select id="verification-agent" (change)="onVerificationAgentChange($event)" [disabled]="!isUserInfoSubmitted || isDocumentsSubmitted">
+          <option value="">Select Agent</option>
+          <option value="amazon-textract">Amazon Textract</option>
+          <option value="google-vision">Google Vision AI</option>
+          <option value="azure-form">Azure Form Recognizer</option>
+          <option value="custom">Custom Agent</option>
+        </select>
+      </div>
+
+      <input type="file" multiple (change)="handleFileUpload($event)" [disabled]="!isUserInfoSubmitted || isDocumentsSubmitted" accept=".zip,application/zip,application/x-zip,application/x-zip-compressed" />
+      <p class="validation-message" *ngIf="documentValidationMessage">{{ documentValidationMessage }}</p>
+      
+      <div class="progress-container" *ngIf="isProcessingDocuments">
+        <p class="processing-text">Processing documents...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" [style.width.%]="uploadProgress"></div>
+        </div>
+        <p class="progress-percentage">{{ uploadProgress }}%</p>
+      </div>
+      
+      <button type="button" (click)="submitDocuments()" [disabled]="!isUserInfoSubmitted || isDocumentsSubmitted || isProcessingDocuments">Submit Documents</button>
+    </section>
+
+    <section class="tile verification" [class.disabled]="!isDocumentsSubmitted">
+      <div class="tile-icon">✓</div>
+      <h2>Verification</h2>
+      <p>We will verify your uploaded documents with AI Agent & you will be notified shortly via email {{ userName }}. Thank you so much for your patience.</p>
+    </section>
+
+    <section class="tile kyc" [class.disabled]="!isUserInfoSubmitted">
+      <div class="tile-icon">👤</div>
+      <h2>KYC (Know Your Customer)</h2>
+      <p>Fill in your personal details for KYC compliance:</p>
+      <form [formGroup]="kycForm" (ngSubmit)="submitKYC()">
+        <label for="name">Name:</label>
+        <input type="text" id="name" formControlName="name" [disabled]="!isUserInfoSubmitted" />
+
+        <label for="dob">Date of Birth:</label>
+        <input type="date" id="dob" formControlName="dob" [disabled]="!isUserInfoSubmitted" />
+
+        <p class="validation-message" *ngIf="kycValidationMessage">{{ kycValidationMessage }}</p>
+        <button type="submit" [disabled]="!isUserInfoSubmitted">Submit</button>
+      </form>
+    </section>
+
+    <section class="tile policy-recommendation" [class.disabled]="!isUserInfoSubmitted">
+      <div class="tile-icon">📋</div>
+      <h2>Policy Recommendation</h2>
+      <p>Based on your details, we will recommend the best policies for you.</p>
+      <p class="validation-message" *ngIf="policyValidationMessage">{{ policyValidationMessage }}</p>
+      <button (click)="recommendPolicy()" [disabled]="!isUserInfoSubmitted">Get Recommendations</button>
+    </section>
+  </div>
+</div>

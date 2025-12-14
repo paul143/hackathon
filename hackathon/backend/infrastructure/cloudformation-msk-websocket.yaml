@@ -1,0 +1,512 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'OnboardAI - Insurance Onboarding Platform Infrastructure with Kafka MSK'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, production]
+  
+  DocumentsBucketName:
+    Type: String
+    Default: onboard-ai-documents
+
+Resources:
+  # ============================================
+  # DynamoDB Tables (existing)
+  # ============================================
+  
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'users-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: customerId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: customerId-index
+          KeySchema:
+            - AttributeName: customerId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApplicationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'applications-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: applicationId
+          AttributeType: S
+        - AttributeName: customerId
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: applicationId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: customerId-createdAt-index
+          KeySchema:
+            - AttributeName: customerId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # NEW: WebSocket Connections Table
+  WebSocketConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'websocket-connections-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: customerId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: customerId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # NEW: Kafka Events Log Table
+  KafkaEventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'kafka-events-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: customerId
+          AttributeType: S
+        - AttributeName: eventTimestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: customerId
+          KeyType: HASH
+        - AttributeName: eventTimestamp
+          KeyType: RANGE
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================
+  # Kafka MSK Cluster
+  # ============================================
+
+  KafkaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Kafka MSK cluster
+      VpcId: !Ref DefaultVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 9092
+          ToPort: 9092
+          CidrIp: 0.0.0.0/0
+          Description: Plaintext broker communication
+        - IpProtocol: tcp
+          FromPort: 9094
+          ToPort: 9094
+          CidrIp: 0.0.0.0/0
+          Description: TLS broker communication
+        - IpProtocol: tcp
+          FromPort: 2181
+          ToPort: 2181
+          CidrIp: 0.0.0.0/0
+          Description: ZooKeeper
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub 'onboard-ai-kafka-sg-${Environment}'
+
+  KafkaCluster:
+    Type: AWS::Kafka::Cluster
+    Properties:
+      ClusterName: !Sub 'onboard-ai-cluster-${Environment}'
+      KafkaVersion: '3.4.0'
+      BrokerNodeGroupInfo:
+        InstanceType: kafka.t3.small
+        ClientSubnets:
+          - !Select [0, !GetAZs '']
+          - !Select [1, !GetAZs '']
+        SecurityGroups:
+          - !GetAtt KafkaSecurityGroup.GroupId
+        StorageInfo:
+          EBSStorageInfo:
+            VolumeSize: 100
+        ConnectivityInfo:
+          PublicAccess:
+            Enabled: true
+      EncryptionInfo:
+        EncryptionInTransit:
+          ClientBroker: SASL_SSL
+          InCluster: true
+        EncryptionAtRest:
+          DataVolumeKMS: !GetAtt KafkaEncryptionKey.Arn
+      ClientAuthentication:
+        Sasl:
+          Scram:
+            Enabled: true
+          Iam:
+            Enabled: false
+      Tags:
+        Environment: !Ref Environment
+
+  KafkaEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Kafka MSK encryption
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              Service: kafka.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+            Resource: '*'
+
+  # Kafka User (for authentication)
+  KafkaSecretKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'onboard-ai/kafka/${Environment}'
+      Description: Kafka MSK credentials
+      SecretString: !Sub |
+        {
+          "username": "onboard-ai-producer",
+          "password": "${KafkaPassword}"
+        }
+
+  KafkaPassword:
+    Type: AWS::SecretsManager::RandomPassword
+    Properties:
+      PasswordLength: 32
+      ExcludeCharacters: '"''@/\'
+
+  # ============================================
+  # API Gateway WebSocket
+  # ============================================
+
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub 'onboard-ai-websocket-${Environment}'
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: '$request.body.action'
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: !Ref Environment
+      AutoDeploy: true
+      LoggingLevel: INFO
+      DataTraceEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt WebSocketLogGroup.Arn
+        Format: '$context.requestId $context.eventType $context.identity.sourceIp'
+
+  WebSocketLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/websocket/${Environment}'
+      RetentionInDays: 7
+
+  # WebSocket Routes and Integrations
+  WebSocketConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$connect'
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${WebSocketConnectIntegration}'
+
+  WebSocketConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketConnectLambda.Arn}/invocations'
+
+  WebSocketDisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$disconnect'
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${WebSocketDisconnectIntegration}'
+
+  WebSocketDisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketDisconnectLambda.Arn}/invocations'
+
+  WebSocketDefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: '$default'
+      AuthorizationType: NONE
+      Target: !Sub 'integrations/${WebSocketDefaultIntegration}'
+
+  WebSocketDefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WebSocketDefaultLambda.Arn}/invocations'
+
+  # ============================================
+  # Lambda Functions for WebSocket
+  # ============================================
+
+  WebSocketLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:DeleteItem'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                Resource: !GetAtt WebSocketConnectionsTable.Arn
+        - PolicyName: ApiGatewayManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'execute-api:ManageConnections'
+                Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
+
+  WebSocketConnectLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'onboard-ai-websocket-connect-${Environment}'
+      Runtime: nodejs18.x
+      Handler: websocket-handlers.connectHandler
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          exports.connectHandler = async (event) => {
+            try {
+              const connectionId = event.requestContext.connectionId;
+              const customerId = event.queryStringParameters?.customerId;
+              if (!customerId) return { statusCode: 400, body: JSON.stringify({ error: 'customerId required' }) };
+              await dynamodb.put({
+                TableName: process.env.WEBSOCKET_TABLE,
+                Item: { customerId, connectionId, connectedAt: new Date().toISOString() }
+              }).promise();
+              return { statusCode: 200, body: JSON.stringify({ message: 'Connected' }) };
+            } catch (error) {
+              return { statusCode: 500, body: JSON.stringify({ error: 'Connection failed' }) };
+            }
+          };
+      Environment:
+        Variables:
+          WEBSOCKET_TABLE: !Ref WebSocketConnectionsTable
+      Role: !GetAtt WebSocketLambdaRole.Arn
+
+  WebSocketDisconnectLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'onboard-ai-websocket-disconnect-${Environment}'
+      Runtime: nodejs18.x
+      Handler: websocket-handlers.disconnectHandler
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamodb = new AWS.DynamoDB.DocumentClient();
+          exports.disconnectHandler = async (event) => {
+            try {
+              const connectionId = event.requestContext.connectionId;
+              const result = await dynamodb.scan({
+                TableName: process.env.WEBSOCKET_TABLE,
+                FilterExpression: 'connectionId = :cid',
+                ExpressionAttributeValues: { ':cid': connectionId }
+              }).promise();
+              if (result.Items?.length) {
+                await dynamodb.delete({
+                  TableName: process.env.WEBSOCKET_TABLE,
+                  Key: { customerId: result.Items[0].customerId }
+                }).promise();
+              }
+              return { statusCode: 200, body: JSON.stringify({ message: 'Disconnected' }) };
+            } catch (error) {
+              return { statusCode: 500, body: JSON.stringify({ error: 'Disconnect failed' }) };
+            }
+          };
+      Environment:
+        Variables:
+          WEBSOCKET_TABLE: !Ref WebSocketConnectionsTable
+      Role: !GetAtt WebSocketLambdaRole.Arn
+
+  WebSocketDefaultLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'onboard-ai-websocket-default-${Environment}'
+      Runtime: nodejs18.x
+      Handler: websocket-handlers.defaultHandler
+      Code:
+        ZipFile: |
+          exports.defaultHandler = async (event) => {
+            return { statusCode: 200, body: JSON.stringify({ message: 'Message received' }) };
+          };
+      Role: !GetAtt WebSocketLambdaRole.Arn
+
+  # Lambda permissions for WebSocket
+  WebSocketConnectLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebSocketConnectLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
+
+  WebSocketDisconnectLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebSocketDisconnectLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
+
+  WebSocketDefaultLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebSocketDefaultLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*'
+
+  # ============================================
+  # IAM Role for Kafka Producers (Lambda)
+  # ============================================
+
+  KafkaProducerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: KafkaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'kafka:GetBootstrapBrokers'
+                  - 'kafka-cluster:Connect'
+                  - 'kafka-cluster:AlterCluster'
+                  - 'kafka-cluster:DescribeCluster'
+                Resource:
+                  - !Sub 'arn:aws:kafka:${AWS::Region}:${AWS::AccountId}:cluster/onboard-ai-cluster-${Environment}/*'
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref KafkaSecretKey
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:Query'
+                Resource:
+                  - !GetAtt ApplicationsTable.Arn
+                  - !GetAtt UsersTable.Arn
+                  - !GetAtt KafkaEventsTable.Arn
+
+Outputs:
+  KafkaBootstrapServers:
+    Description: Kafka cluster bootstrap brokers
+    Value: !GetAtt KafkaCluster.BootstrapBrokers
+    Export:
+      Name: !Sub '${Environment}-KafkaBootstrapServers'
+
+  KafkaSecretArn:
+    Description: ARN of Kafka credentials secret
+    Value: !Ref KafkaSecretKey
+    Export:
+      Name: !Sub '${Environment}-KafkaSecretArn'
+
+  WebSocketApiEndpoint:
+    Description: WebSocket API endpoint URL
+    Value: !Sub 'wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${Environment}-WebSocketEndpoint'
+
+  WebSocketConnectionsTableName:
+    Description: Name of WebSocket connections table
+    Value: !Ref WebSocketConnectionsTable
+    Export:
+      Name: !Sub '${Environment}-WebSocketTableName'
+
+  KafkaEventsTableName:
+    Description: Name of Kafka events table
+    Value: !Ref KafkaEventsTable
+    Export:
+      Name: !Sub '${Environment}-KafkaEventsTableName'

@@ -1,0 +1,52 @@
+<div class="header">
+  <div class="header-logos">
+    <img src="https://login.zscloud.net:443/__zsig/cZQsfFvJkTfNF" alt="Cognizant Logo" class="logo" />
+    <h1 class="app-title">Agentic AI Onboarding Assistant</h1>
+  </div>
+
+  <div class="header-actions">
+    <span *ngIf="isAuthenticated() && getUserName()" class="welcome-message">Welcome, {{ getUserName() }}!</span>
+    <button *ngIf="isAuthenticated()" class="logout-btn" (click)="logout()">Logout</button>
+  </div>
+</div>
+
+<router-outlet></router-outlet>
+
+<!-- Chatbot Widget -->
+<div class="chatbot-container" [class.open]="isChatOpen" *ngIf="isAuthenticated()">
+  <div class="chatbot-header" (click)="toggleChat()">
+    <span class="chatbot-icon">💬</span>
+    <span class="chatbot-title">Help Assistant</span>
+    <span class="chatbot-toggle">{{ isChatOpen ? '−' : '+' }}</span>
+  </div>
+  
+  <div class="chatbot-body" *ngIf="isChatOpen">
+    <div class="chatbot-messages">
+      <div *ngFor="let message of chatMessages" 
+           class="chat-message" 
+           [class.user]="message.sender === 'user'"
+           [class.bot]="message.sender === 'bot'">
+        <div class="message-bubble">
+          <p>{{ message.text }}</p>
+          <span class="message-time">{{ message.time }}</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="chatbot-input">
+      <input type="text" 
+             [(ngModel)]="chatInput" 
+             (keyup.enter)="sendMessage()" 
+             placeholder="Ask me anything about this portal..." />
+      <button (click)="sendMessage()">Send</button>
+    </div>
+  </div>
+</div>
+
+<footer class="app-footer">
+  <div class="footer-content">
+    <p>&copy; 2025 Cognizant. All rights reserved.</p>
+    <p>Agentic AI Onboarding Portal | AWS Hackathon 2025</p>
+    <p>738704@cognizant.com | Paul, Vamsi & Venkat</p>
+  </div>
+</footer>

@@ -1,0 +1,50 @@
+<div class="login-page">
+  <div class="login-hero">
+    <div class="hero-content">
+      <h1>Cognizant AWS Hackathon 2025</h1>
+      <h2>Agentic AI Onboarding Assistant Portal</h2>
+      <p class="powered-by">Powered by Paul Pandy P (738704)</p>
+    </div>
+  </div>
+
+  <div class="login-card" role="main">
+    <div class="card-top">
+      <div class="brand">
+        <img src="https://login.zscloud.net:443/__zsig/cZQsfFvJkTfNF" alt="logo" class="brand-logo" />
+        <h2>Agentic AI Onboarding Assistant</h2>
+      </div>
+      <p class="lead">Secure access — sign in to manage onboarding</p>
+    </div>
+
+    <form [formGroup]="loginForm" (ngSubmit)="submit()" class="login-form" novalidate>
+      <div class="field">
+        <input id="username" formControlName="username" placeholder=" " autocomplete="username" />
+        <label for="username">Username</label>
+        <span class="icon" aria-hidden="true">👤</span>
+      </div>
+
+      <div class="field">
+        <input id="password" type="password" formControlName="password" placeholder=" " autocomplete="current-password" />
+        <label for="password">Password</label>
+        <span class="icon" aria-hidden="true">🔒</span>
+      </div>
+
+      <button type="submit" class="primary">Sign In</button>
+    </form>
+
+    <div class="social">
+      <button class="social-btn google" (click)="onSocialClick('google', $event)">
+        <span class="s-icon">G</span>
+        Sign in with Google
+      </button>
+
+      <button class="social-btn sso" (click)="onSocialClick('sso', $event)">
+        <span class="s-icon">S</span>
+        Sign in with SSO
+      </button>
+    </div>
+
+    <p class="error" *ngIf="error">{{ error }}</p>
+    <p class="hint">Hint: <strong>admin</strong> / <strong>admin</strong></p>
+  </div>
+</div>
